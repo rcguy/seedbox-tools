@@ -1,0 +1,54 @@
+Seedbox:
+  # labels to skip when deleting torrents
+  skip_labels: [apps-pc]
+
+  # Minium time in seconds to leave files on NVMe before moving
+  nvme_cache_time: 7200
+
+  # NVMe root dir
+  nvme_dir: /opt/downloads
+
+  # Rust root dir
+  rust_dir: /mnt/storage/downloads
+
+  # Sleep time in seconds before moving torrents
+  sleep_time: 15
+  
+  # Backup dir for exported torrent files
+  export_dir: exported_torrents
+
+  # Minium seeding time in hours before removing torrents
+  minimum_seed_time: 72
+  
+  # Seed time in hours for each category
+  # If a torrent doesn't have a category or the category is not listed here, it will use the default minimum_seed_time
+  category_seed_time:
+    tv-720p: 72
+    tv-1080p: 96
+    tv-2160p: 120
+    movies-1080p: 120
+    movies-2160p: 144
+
+  # Torrent Client Settings
+  Deluge:
+    # Daemon connection settings
+    host: 127.0.0.1
+    port: 58846
+  
+    # Web-UI
+    url: http://127.0.0.1:8112
+    username: username
+    password: password
+  
+    # Deluge state dir
+    state_dir: /srv/deluge/.config/deluge/state
+
+  qBittorrent:
+    # Web-UI
+    host: 127.0.0.1:8181
+    username: admin
+    password: password
+
+  rTorrent:
+    # NginX reverse proxy to rTorrent unix socket
+    server_url: http://127.0.0.1:80/xmlrpc
