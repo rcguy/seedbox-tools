@@ -260,7 +260,7 @@ def get_torrents(client: DelugeWebClient, filter: dict = {}) -> list:
 
     try:
         logger.info("Getting list of all torrents...")
-        raw = client.get_torrents_status(keys=('hash', 'name', 'save_path', 'seeding_time', 'state', 'tracker_status', 'label'), 
+        raw = client.get_torrents_status(keys=('hash', 'name', 'save_path', 'seeding_time', 'completed_time', 'state', 'tracker_status', 'label', 'total_size'), 
                                          filter_dict=filter, timeout=60).result
 
         mapped = []
@@ -268,15 +268,14 @@ def get_torrents(client: DelugeWebClient, filter: dict = {}) -> list:
             ti = TorrentInfo(
                 name=info.get('name'),
                 category=info.get('label'),
-                tags=None,
                 infohash=info.get('hash'),
                 save_path=info.get('save_path'),
-                timestamp_finished=None,
-                message=None,
+                timestamp_finished=info.get('completed_time'),
                 state=info.get('state'),
                 tracker_status=info.get('tracker_status'),
                 session_file=os.path.join(state_dir, f"{tid}.torrent") if 'state_dir' in globals() else None,
                 seeding_time=info.get('seeding_time'),
+                total_size=info.get('total_size'),
             )
             mapped.append(ti)
 

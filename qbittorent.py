@@ -141,15 +141,15 @@ def get_torrents(client: qbittorrentapi.Client, status_filter: str, category_fil
         mapped = []
         for t in raw:
             ti = TorrentInfo(
-                name=getattr(t, "name", None),
+                name=getattr(t, "name", ""),
                 category=getattr(t, "category", None),
                 tags=getattr(t, "tags", None),
                 infohash=getattr(t, "infohash_v1", getattr(t, "hash", None)),
                 save_path=getattr(t, "save_path", None),
                 timestamp_finished=getattr(t, "completion_on", None),
-                message=None,
                 session_file=None,
                 seeding_time=getattr(t, "seeding_time", None),
+                total_size=getattr(t, "total_size", None),
             )
             mapped.append(ti)
 
