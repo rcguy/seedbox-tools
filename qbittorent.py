@@ -22,7 +22,7 @@
 # Author - rcguy
 # Created - 2026-03-16
 # Updated - 2026-03-30
-# Version - 1.1.2
+# Version - 1.2.0
 # Requires - loguru pyyaml qbittorrent-api
 #
 
@@ -35,6 +35,7 @@ import qbittorrentapi
 from datetime import datetime
 from loguru import logger
 from my_utils import make_dir, load_yaml
+from models.torrent_info import TorrentInfo
 
 
 def cli() -> object:
@@ -132,13 +133,27 @@ def cli() -> object:
 def get_torrents(client: qbittorrentapi.Client, status_filter: str, category_filter:str, tag_filter: str) -> list:
     """Get list of all torrents in the client"""
 
-    all_torrents = list()
-
     try:
         logger.info("Getting list of all torrents...")
-        all_torrents = client.torrents_info(status_filter=status_filter, category=category_filter, tag=tag_filter, sort="seeding_time")
-        logger.info(f"Found {len(all_torrents)} torrents")
-        return all_torrents
+        raw = client.torrents_info(status_filter=status_filter, category=category_filter, tag=tag_filter, sort="seeding_time")
+        logger.info(f"Found {len(raw)} torrents")
+
+        mapped = []
+        for t in raw:
+            ti = TorrentInfo(
+                name=getattr(t, "name", None),
+                category=getattr(t, "category", None),
+                tags=getattr(t, "tags", None),
+                infohash=getattr(t, "infohash_v1", getattr(t, "hash", None)),
+                save_path=getattr(t, "save_path", None),
+                timestamp_finished=getattr(t, "completion_on", None),
+                message=None,
+                session_file=None,
+                seeding_time=getattr(t, "seeding_time", None),
+            )
+            mapped.append(ti)
+
+        return mapped
     except Exception as err:
         logger.error(err)
         sys.exit(1)
@@ -149,7 +164,7 @@ def list_torrents(torrent_list: list) -> None:
 
     if torrent_list:
         for torrent in torrent_list:
-            logger.debug(f"{torrent.hash[-6:]}: {torrent.name} cat={torrent.category} tags={torrent.tags} seed_time={torrent.seeding_time} path={torrent.save_path} ")
+            logger.debug(f"{(torrent.infohash or '')[-6:]}: {torrent.name} cat={torrent.category} tags={torrent.tags} seed_time={torrent.seeding_time} path={torrent.save_path} ")
     else:
         logger.error("List of torrents is empty!")
 
@@ -164,12 +179,12 @@ def move_torrents(client: qbittorrentapi.Client, torrent_list: list) -> None:
             data_path = os.path.join(torrent.save_path, torrent.name)
             root_path = os.path.commonpath([data_path, nvme_dir])
 
-            if torrent.seeding_time > nvme_time and root_path == nvme_dir:
+            if (torrent.seeding_time or 0) > nvme_time and root_path == nvme_dir:
                 torrent_directory = os.path.join(rust_dir, torrent.category)
                 logger.info(f"Moving {torrent.name} to {torrent_directory}")
 
                 if not dry_run:
-                    client.torrents_set_location(location=torrent_directory, torrent_hashes=torrent.infohash_v1)
+                    client.torrents_set_location(location=torrent_directory, torrent_hashes=torrent.infohash)
     else:
         logger.error("List of torrents is empty!")
 
@@ -190,7 +205,7 @@ def export_torrents(client: qbittorrentapi.Client, backup_dir: str, torrent_list
                 try:
                     if not dry_run:
                         make_dir(torrent_output_path)
-                        torrent_file_bytes = client.torrents_export(torrent_hash=torrent.infohash_v1)
+                        torrent_file_bytes = client.torrents_export(torrent_hash=torrent.infohash)
                         with open(torrent_output_file, "wb") as fh:
                             fh.write(torrent_file_bytes)
                     logger.debug(f"Exported .torrent: {torrent_name}")
@@ -211,9 +226,9 @@ def unregistered_torrents(client: qbittorrentapi.Client, torrent_list: list) -> 
         logger.info("Searching for unregistered torrents...")
 
         for torrent in torrent_list:
-            torrent_infohash = torrent.infohash_v1
+            torrent_infohash = torrent.infohash
             torrent_tracker = client.torrents_trackers(torrent_hash=torrent_infohash)
-            unregistered = re.search("Unregistered", torrent_tracker[-1].msg)
+            unregistered = re.search("Unregistered", getattr(torrent_tracker[-1], 'msg', '') if torrent_tracker else "")
             label_allowed = False if torrent.category in skip_labels else True
 
             if unregistered and label_allowed:
@@ -240,12 +255,12 @@ def autoremove_torrents(client: qbittorrentapi.Client, torrent_list: list) -> No
         logger.info("Searching for torrents to autoremove...")
 
         for torrent in torrent_list:
-            torrent_seed_time = torrent.seeding_time // 3600 # hours
+            torrent_seed_time = (torrent.seeding_time or 0) // 3600 # hours
             torrent_category = torrent.category
             seed_time = category_seed_time.get(torrent_category, minimum_seed_time)
             
             if torrent_seed_time > seed_time and torrent_category not in skip_labels:
-                torrents_to_delete.append(torrent.infohash_v1)
+                torrents_to_delete.append(torrent.infohash)
                 logger.debug(f"Torrent found: seed_time={torrent_seed_time} - {torrent.name} ")
 
         if not dry_run and torrents_to_delete:

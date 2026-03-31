@@ -12,7 +12,7 @@ Seedbox:
   rust_dir: /mnt/storage/downloads
 
   # Sleep time in seconds before moving torrents
-  sleep_time: 15
+  sleep_time: 5
   
   # Backup dir for exported torrent files
   export_dir: exported_torrents
@@ -31,21 +31,20 @@ Seedbox:
 
   # Torrent Client Settings
   Deluge:
-    # Daemon connection settings
+    # Daemon
     host: 127.0.0.1
     port: 58846
-  
     # Web-UI
     url: http://127.0.0.1:8112
     username: username
     password: password
-  
-    # Deluge state dir
-    state_dir: /srv/deluge/.config/deluge/state
+    # Config dir
+    cfgdir: /srv/deluge/.config/deluge
 
   qBittorrent:
     # Web-UI
-    host: 127.0.0.1:8181
+    host: 127.0.0.1
+    port: 8181
     username: admin
     password: password
 

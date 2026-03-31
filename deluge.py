@@ -22,7 +22,7 @@
 # Author - rcguy
 # Created - 2026-03-16
 # Updated - 2026-03-29
-# Version - 1.2.2
+# Version - 1.3.0
 # Requires - loguru pyyaml deluge_web_client
 #
 
@@ -40,6 +40,7 @@ from datetime import datetime
 from deluge_web_client import DelugeWebClient, TorrentOptions, Response
 from loguru import logger
 from my_utils import make_dir, load_yaml
+from models.torrent_info import TorrentInfo
 
 
 def cli() -> object:
@@ -254,54 +255,69 @@ def reset_web_password(web_cfg_path: str) -> None:
         sys.exit(1)
 
 
-def get_torrents(client: DelugeWebClient, filter: dict = {}) -> dict:
-    """Get list of all torrents in the client"""
-
-    all_torrents = dict()
+def get_torrents(client: DelugeWebClient, filter: dict = {}) -> list:
+    """Get list of all torrents in the client and return a list of TorrentInfo"""
 
     try:
         logger.info("Getting list of all torrents...")
-        all_torrents = client.get_torrents_status(keys=('hash', 'name', 'save_path', 'seeding_time', 'state', 'tracker_status', 'label'), 
-                                                    filter_dict=filter, timeout=60).result
-        logger.success(f"Found {len(all_torrents)} torrents")
-        return all_torrents
+        raw = client.get_torrents_status(keys=('hash', 'name', 'save_path', 'seeding_time', 'state', 'tracker_status', 'label'), 
+                                         filter_dict=filter, timeout=60).result
+
+        mapped = []
+        for tid, info in raw.items():
+            ti = TorrentInfo(
+                name=info.get('name'),
+                category=info.get('label'),
+                tags=None,
+                infohash=info.get('hash'),
+                save_path=info.get('save_path'),
+                timestamp_finished=None,
+                message=None,
+                state=info.get('state'),
+                tracker_status=info.get('tracker_status'),
+                session_file=os.path.join(state_dir, f"{tid}.torrent") if 'state_dir' in globals() else None,
+                seeding_time=info.get('seeding_time'),
+            )
+            mapped.append(ti)
+
+        logger.success(f"Found {len(mapped)} torrents")
+        return mapped
     except Exception as err:
         logger.error(err)
         sys.exit(1)
 
 
-def list_torrents(torrent_list: dict) -> None:
+def list_torrents(torrent_list: list) -> None:
     """Print list of torrents in client"""
 
     if torrent_list:
-        for k, v in torrent_list.items():
-            logger.debug(f"{k[-6:]}: {v['name']} path={v['save_path']} seed_time={v['seeding_time']} state={v['state']} tracker_status='{v['tracker_status']}' label='{v['label']}'")
+        for torrent in torrent_list:
+            logger.debug(f"{(torrent.infohash or '')[-6:]}: {torrent.name} path={torrent.save_path} seed_time={torrent.seeding_time} state={torrent.state} tracker_status='{torrent.tracker_status}' label='{torrent.category}'")
     else:
         logger.error("List of torrents is empty!")
 
 
-def move_torrents(client: DelugeWebClient, torrent_list: dict) -> None:
+def move_torrents(client: DelugeWebClient, torrent_list: list) -> None:
     """Move torrent files from NVMe to Spinning Rust after N seconds"""
 
     if torrent_list:
         logger.info("Searching for torrents to move...")
 
-        for tid, info in torrent_list.items():
-            #data_path = os.path.join(info['save_path'], info['name'])
-            root_path = os.path.commonpath([info['save_path'], nvme_dir])
+        for torrent in torrent_list:
+            root_path = os.path.commonpath([torrent.save_path, nvme_dir])
 
-            if info['state'] == 'Seeding' and info['seeding_time'] > nvme_time and root_path == nvme_dir:
-                torrent_directory = os.path.join(rust_dir, info['label'])
-                logger.info(f"Moving {info['name']} to {torrent_directory}")
+            if torrent.state == 'Seeding' and (torrent.seeding_time or 0) > nvme_time and root_path == nvme_dir:
+                torrent_directory = os.path.join(rust_dir, torrent.category)
+                logger.info(f"Moving {torrent.name} to {torrent_directory}")
 
                 if not dry_run:
                     payload = {"method": "core.move_storage",
-                                "params": [[tid], torrent_directory],
+                                "params": [[torrent.tid], torrent_directory],
                             }
                     moved = client.execute_call(payload)
 
                     if moved.error is not None:
-                        logger.error(f"Failed to move torrent: {info['name']} - {moved.message}")
+                        logger.error(f"Failed to move torrent: {torrent.name} - {moved.message}")
                         continue
 
                     if sleep_time > 0:
@@ -311,22 +327,22 @@ def move_torrents(client: DelugeWebClient, torrent_list: dict) -> None:
         logger.error("List of torrents is empty!")
 
 
-def export_torrents(backup_dir: str, torrent_list: dict) -> None:
+def export_torrents(backup_dir: str, torrent_list: list) -> None:
     """Copy all torrents from client to backup dir"""
 
     if torrent_list:
         logger.info(f"Copying all .torrent files to: {backup_dir}")
         export_date = datetime.now().strftime("%Y-%m-%dT%H%M%S")
 
-        for tid, info in torrent_list.items():
-            torrent_name = info['name']
-            torrent_output_path = os.path.join(backup_dir, export_date, info['label'])
+        for torrent in torrent_list:
+            torrent_name = torrent.name
+            torrent_output_path = os.path.join(backup_dir, export_date, torrent.category)
             torrent_output_file = os.path.join(torrent_output_path, f"{torrent_name}.torrent")
-            torrent_input_file = os.path.join(state_dir, f"{tid}.torrent")
+            torrent_input_file = torrent.session_file
 
             if not os.path.exists(torrent_output_file):
                 try:
-                    if not dry_run and os.path.isfile(torrent_input_file):
+                    if not dry_run and torrent_input_file and os.path.isfile(torrent_input_file):
                         make_dir(torrent_output_path)
                         shutil.copy2(torrent_input_file, torrent_output_file)
                     logger.debug(f"Exported .torrent: {torrent_name}")
@@ -341,22 +357,22 @@ def export_torrents(backup_dir: str, torrent_list: dict) -> None:
         logger.error("List of torrents is empty!")
 
 
-def unregistered_torrents(client: DelugeWebClient, torrent_list: dict) -> None:
+def unregistered_torrents(client: DelugeWebClient, torrent_list: list) -> None:
     """Delete unregistered torrents from client"""
 
     if torrent_list:
         torrents_to_delete = list()
         logger.info("Searching for unregistered torrents...")
 
-        for tid, info in torrent_list.items():
-            torrent_label = info['label']
-            torrent_tracker = info['tracker_status']
-            unregistered = re.search("Unregistered", torrent_tracker, re.IGNORECASE)
+        for torrent in torrent_list:
+            torrent_label = torrent.category
+            torrent_tracker = torrent.tracker_status
+            unregistered = re.search("Unregistered", torrent_tracker or "", re.IGNORECASE)
             label_allowed = False if torrent_label in skip_labels else True
 
             if unregistered and label_allowed:
-                torrents_to_delete.append(tid)
-                logger.debug(f"Unregistered torrent found: {info['name']} tracker_status='{torrent_tracker}' path={info['save_path']} label='{info['label']}'")
+                torrents_to_delete.append(torrent.tid)
+                logger.debug(f"Unregistered torrent found: {torrent.name} tracker_status='{torrent_tracker}' path={torrent.save_path} label='{torrent_label}'")
 
         if not dry_run and torrents_to_delete:
             try:
@@ -372,21 +388,21 @@ def unregistered_torrents(client: DelugeWebClient, torrent_list: dict) -> None:
         logger.error("List of torrents is empty!")
 
 
-def autoremove_torrents(client: DelugeWebClient, torrent_list: dict) -> None:
+def autoremove_torrents(client: DelugeWebClient, torrent_list: list) -> None:
     """Delete torrents that have been seeding for more than N hours"""
 
     if torrent_list:
         torrents_to_delete = list()
         logger.info("Searching for torrents to autoremove...")
 
-        for tid, info in torrent_list.items():
-            torrent_seed_time = info['seeding_time'] // 3600 # hours
-            torrent_category = info['label']
+        for torrent in torrent_list:
+            torrent_seed_time = (torrent.seeding_time or 0) // 3600 # hours
+            torrent_category = torrent.category
             seed_time = category_seed_time.get(torrent_category, minimum_seed_time)
             
             if torrent_seed_time > seed_time and torrent_category not in skip_labels:
-                torrents_to_delete.append(tid)
-                logger.debug(f"Torrent found: seed_time={torrent_seed_time} - {info['name']}")
+                torrents_to_delete.append(torrent.tid)
+                logger.debug(f"Torrent found: seed_time={torrent_seed_time} - {torrent.name}")
 
         if not dry_run and torrents_to_delete:
             try:

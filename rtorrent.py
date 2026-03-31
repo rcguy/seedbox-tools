@@ -22,7 +22,7 @@
 # Author - rcguy
 # Created - 2026-03-16
 # Updated - 2026-03-30
-# Version - 1.3.2
+# Version - 1.4.0
 # Requires - loguru pyyaml rcguy_utils
 #
 
@@ -37,6 +37,7 @@ import yaml
 from datetime import datetime
 from loguru import logger
 from my_utils import make_dir, delete_files, load_yaml, find_files, create_zip
+from models.torrent_info import TorrentInfo
 
 
 def cli() -> object:
@@ -137,18 +138,35 @@ def cli() -> object:
 def get_torrents(server_url: str, status_filter: str = "seeding", category_filter: str | None = None) -> list:
     """Get list of all torrents in the client"""
 
-    all_torrents = list()
     fields = ("d.name=", "d.custom1=", "d.hash=", "d.data_path=", "d.timestamp.finished=", "d.message=", "d.session_file=")
 
     try:
         logger.info("Getting list of all torrents...")
         with xmlrpc.client.ServerProxy(server_url) as rtorrent:
             if category_filter is not None:
-                all_torrents = rtorrent.d.multicall.filtered("", status_filter, f'equal=d.custom1=,cat={category_filter}', *fields)
+                raw = rtorrent.d.multicall.filtered("", status_filter, f'equal=d.custom1=,cat={category_filter}', *fields)
             else:
-                all_torrents = rtorrent.d.multicall2("", status_filter, *fields)
-            logger.info(f"Found {len(all_torrents)} torrents")
-            return all_torrents
+                raw = rtorrent.d.multicall2("", status_filter, *fields)
+
+            mapped = []
+            for t in raw:
+                seeding_time = (int(time.time()) - t[4]) if t[4] else 0
+
+                ti = TorrentInfo(
+                    name=t[0],
+                    category=t[1],
+                    tags=None,
+                    infohash=t[2],
+                    save_path=t[3],
+                    timestamp_finished=t[4],
+                    message=t[5],
+                    session_file=t[6],
+                    seeding_time=seeding_time,
+                )
+                mapped.append(ti)
+
+            logger.info(f"Found {len(mapped)} torrents")
+            return mapped
     except Exception as err:
         logger.error(err)
         sys.exit(1)
@@ -159,17 +177,8 @@ def list_torrents(torrent_list: list) -> None:
 
     if torrent_list:
         for torrent in torrent_list:
-            #print(torrent)
-            torrent_name = torrent[0]
-            torrent_label = torrent[1]
-            torrent_hash = torrent[2]
-            torrent_data_path = torrent[3]
-            torrent_timestamp_finished = torrent[4]
-            torrent_message = torrent[5]
-            torrent_session_file = torrent[6]
-            seeding_time = (int(time.time()) - torrent_timestamp_finished) // 3600
-            
-            logger.debug(f"{torrent_hash[-6:]}: {torrent_name} label='{torrent_label}' seed_time={seeding_time} path={torrent_data_path} session_file={torrent_session_file} tracker_status='{torrent_message}'")
+            #seeding_hours = (torrent.seeding_time // 3600) if torrent.seeding_time else None
+            logger.debug(f"{(torrent.infohash or '')[-6:]}: {torrent.name} label='{torrent.category}' seed_time={torrent.seeding_time} path={torrent.save_path} session_file={torrent.session_file} tracker_status='{torrent.message}'")
     else:
         logger.error("List of torrents is empty!")
 
@@ -181,30 +190,24 @@ def move_torrents(server_url: str, torrent_list: list) -> None:
         logger.debug("Searching for torrents to move...")
         with xmlrpc.client.ServerProxy(server_url) as rtorrent:
             for torrent in torrent_list:
-                torrent_name = torrent[0]
-                torrent_hash = torrent[2]
-                torrent_data_path = torrent[3]
-                torrent_timestamp_finished = torrent[4]
+                root_path = os.path.commonpath([torrent.save_path, nvme_dir])
                 
-                seeding_time = (int(time.time()) - torrent_timestamp_finished)
-                root_path = os.path.commonpath([torrent_data_path, nvme_dir])
-                
-                if seeding_time > nvme_time and root_path == nvme_dir:
-                    torrent_rel_path = os.path.relpath(torrent_data_path, nvme_dir)
+                if torrent.seeding_time or 0 > nvme_time and root_path == nvme_dir:
+                    torrent_rel_path = os.path.relpath(torrent.save_path, nvme_dir)
                     torrent_move_path = os.path.join(rust_dir, torrent_rel_path)
                     torrent_directory = os.path.dirname(torrent_move_path)
                     logger.debug(f"{torrent_rel_path} - {torrent_move_path} - {torrent_directory}")
 
                     if not dry_run:
                         try:
-                            logger.info(f"Moving {torrent_name} to {torrent_directory}")
-                            if os.path.isfile(torrent_data_path):
+                            logger.info(f"Moving {torrent.name} to {torrent_directory}")
+                            if os.path.isfile(torrent.save_path):
                                 make_dir(torrent_directory)
-                                shutil.copy2(torrent_data_path, torrent_move_path)
-                            elif os.path.isdir(torrent_data_path):
-                                shutil.copytree(torrent_data_path, torrent_move_path)
+                                shutil.copy2(torrent.save_path, torrent_move_path)
+                            elif os.path.isdir(torrent.save_path):
+                                shutil.copytree(torrent.save_path, torrent_move_path)
                         except FileNotFoundError:
-                            logger.error(f"No such file or directory: '{torrent_data_path}'")
+                            logger.error(f"No such file or directory: '{torrent.save_path}'")
                             continue
                         except FileExistsError:
                             logger.error(f"File exists: '{torrent_move_path}'")
@@ -214,13 +217,13 @@ def move_torrents(server_url: str, torrent_list: list) -> None:
                             continue    
 
                         multicall = xmlrpc.client.MultiCall(rtorrent)
-                        multicall.d.stop(torrent_hash)
-                        multicall.d.directory.set(torrent_hash, torrent_directory)
-                        multicall.d.start(torrent_hash)
+                        multicall.d.stop(torrent.infohash)
+                        multicall.d.directory.set(torrent.infohash, torrent_directory)
+                        multicall.d.start(torrent.infohash)
 
                         multicall()
-                        rtorrent.d.save_full_session(torrent_hash)
-                        delete_files(torrent_data_path)
+                        rtorrent.d.save_full_session(torrent.infohash)
+                        delete_files(torrent.save_path)
                         
                         if sleep_time > 0:
                             logger.info(f"Sleeping for {sleep_time} seconds before moving next torrent...")
@@ -238,24 +241,17 @@ def unregistered_torrents(server_url: str, torrent_list: list) -> None:
         try:
             with xmlrpc.client.ServerProxy(server_url) as rtorrent:
                 for torrent in torrent_list:
-                    torrent_name = torrent[0]
-                    torrent_label = torrent[1]
-                    torrent_hash = torrent[2]
-                    torrent_data_path = torrent[3]
-                    torrent_message = torrent[5]
-                    
-                    unregistered = re.search("Unregistered", torrent_message)
-                    label_allowed = False if torrent_label in skip_labels else True
+                    unregistered = re.search("Unregistered", torrent.message or "")
     
-                    if not dry_run and unregistered and label_allowed:
-                        logger.debug(f"Unregistered torrent found: {torrent_name} tracker_status='{torrent_message}' path={os.path.dirname(torrent_data_path)} label='{torrent_label}'")
+                    if not dry_run and unregistered and torrent.category not in skip_labels:
+                        logger.debug(f"Unregistered torrent found: {torrent.name} tracker_status='{torrent.message}' path={os.path.dirname(torrent.save_path)} label='{torrent.category}'")
                         multicall = xmlrpc.client.MultiCall(rtorrent)
-                        multicall.d.try_stop(torrent_hash)
-                        multicall.d.try_close(torrent_hash)
-                        multicall.d.erase(torrent_hash)
+                        multicall.d.try_stop(torrent.infohash)
+                        multicall.d.try_close(torrent.infohash)
+                        multicall.d.erase(torrent.infohash)
                         multicall()
     
-                        delete_files(torrent_data_path)
+                        delete_files(torrent.save_path)
     
                 logger.debug("Saving rTorrent session...")
                 rtorrent.session.save()
@@ -277,20 +273,17 @@ def export_torrents(backup_dir: str, torrent_list: list, zip_output: bool = Fals
         backup_path = os.path.join(backup_dir, export_date)
 
         for torrent in torrent_list:
-            torrent_name = torrent[0]
-            torrent_label = torrent[1]
-            torrent_session_file = torrent[6]
-            torrent_output_path = os.path.join(backup_path, torrent_label)
-            torrent_output_file = os.path.join(torrent_output_path, f"{torrent_name}.torrent")
+            torrent_output_path = os.path.join(backup_path, torrent.category)
+            torrent_output_file = os.path.join(torrent_output_path, f"{torrent.name}.torrent")
 
             if not os.path.exists(torrent_output_file):
                 try:
-                    if not dry_run and os.path.isfile(torrent_session_file):
+                    if not dry_run and os.path.isfile(torrent.session_file):
                         make_dir(torrent_output_path)
-                        shutil.copy2(torrent_session_file, torrent_output_file)
-                    logger.debug(f"Exported .torrent: {torrent_name}")
+                        shutil.copy2(torrent.session_file, torrent_output_file)
+                    logger.debug(f"Exported .torrent: {torrent.name}")
                 except FileNotFoundError:
-                    logger.error(f"No such file or directory: '{torrent_session_file}'")
+                    logger.error(f"No such file or directory: '{torrent.session_file}'")
                     continue
             else:
                 logger.warning(f"Torrent Exists: {torrent_output_file}")
@@ -334,25 +327,20 @@ def autoremove_torrents(server_url: str, torrent_list: list) -> None:
         try:
             with xmlrpc.client.ServerProxy(server_url) as rtorrent:
                 for torrent in torrent_list:
-                    torrent_name = torrent[0]
-                    torrent_label = torrent[1]
-                    torrent_hash = torrent[2]
-                    torrent_data_path = torrent[3]
-                    torrent_timestamp_finished = torrent[4]
-                    torrent_seeding_time = (int(time.time()) - torrent_timestamp_finished) // 3600
-                    torrent_min_seed_time = category_seed_time.get(torrent_label, minimum_seed_time)
+                    torrent_seeding_time = torrent.seeding_time // 3600
+                    torrent_min_seed_time = category_seed_time.get(torrent.category, minimum_seed_time)
             
-                    if torrent_seeding_time > torrent_min_seed_time and torrent_label not in skip_labels:
-                        logger.debug(f"Torrent found: seeding_time={torrent_seeding_time} - {torrent_name}")
+                    if torrent_seeding_time > torrent_min_seed_time and torrent.category not in skip_labels:
+                        logger.debug(f"Torrent found: seeding_time={torrent_seeding_time} - {torrent.name}")
 
                     if not dry_run:
                         multicall = xmlrpc.client.MultiCall(rtorrent)
-                        multicall.d.try_stop(torrent_hash)
-                        multicall.d.try_close(torrent_hash)
-                        multicall.d.erase(torrent_hash)
+                        multicall.d.try_stop(torrent.infohash)
+                        multicall.d.try_close(torrent.infohash)
+                        multicall.d.erase(torrent.infohash)
                         multicall()
             
-                        delete_files(torrent_data_path)
+                        delete_files(torrent.save_path)
             
                 logger.debug("Saving rTorrent session...")
                 rtorrent.session.save()
