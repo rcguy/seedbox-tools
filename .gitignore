@@ -207,6 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 # Custom
-cfg/
+cfg/seedbox.yaml
 logs/
 exported_torrents/
