@@ -23,6 +23,20 @@
 # Requires - loguru
 #
 
+"""
+rTorrent client module for seedbox management.
+
+This module provides the rTorrentClient class, which implements the TorrentClient interface
+for interacting with rTorrent via XML-RPC. It supports operations like fetching torrents,
+moving files, removing unregistered torrents, exporting sessions, uploading torrents,
+and auto-removing torrents based on seeding time.
+
+Example:
+    client = rTorrentClient()
+    client.connect(config)
+    torrents = client.get_torrents(config)
+"""
+
 import os
 import sys
 import time
@@ -42,11 +56,30 @@ class rTorrentClient(TorrentClient):
     def __init__(self) -> None:
         self.server_url = None
 
-    def connect(self, config: SeedboxConfig):
+    def connect(self, config: SeedboxConfig) -> None:
+        """Initialize the rTorrent client connection URL from configuration.
+
+        Args:
+            config: SeedboxConfig containing rtorrent.server_url.
+
+        Returns:
+            None
+        """
+
         self.server_url = config.rtorrent.server_url
 
     def get_torrents(self, config: SeedboxConfig) -> list:
-        """Get list of all torrents in the client"""
+        """Fetch torrents from rTorrent via XML-RPC and map them to TorrentInfo objects.
+
+        Args:
+            config: SeedboxConfig containing label filter and status settings.
+
+        Returns:
+            A list of TorrentInfo objects.
+
+        Raises:
+            Exception: on XML-RPC errors (inherited from xmlrpc.client operations).
+        """
 
         fields = ("d.name=", "d.custom1=", "d.hash=", "d.data_path=", "d.timestamp.finished=", "d.message=", "d.session_file=", "d.size_bytes=")
 
@@ -82,7 +115,18 @@ class rTorrentClient(TorrentClient):
             sys.exit(1)
 
     def move_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Move torrent files from NVMe to Spinning Rust after N seconds"""
+        """Move torrents from NVMe staging to final rust storage based on seeding time.
+
+        Args:
+            config: SeedboxConfig containing nvme_dir, rust_dir, nvme_time, sleep_time, dry_run.
+            torrent_list: list of TorrentInfo objects to evaluate and move.
+
+        Returns:
+            None
+
+        Side effects:
+            May copy files/directories, edit rTorrent session, and delete source files.
+        """
 
         if torrent_list:
             logger.debug("Searching for torrents to move...")
@@ -130,7 +174,18 @@ class rTorrentClient(TorrentClient):
             logger.error(f"List of torrents is empty!")
 
     def unregistered_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Delete unregistered torrents from client"""
+        """Remove torrents marked as unregistered, except skipped labels, and delete their data.
+
+        Args:
+            config: SeedboxConfig with skip_labels and dry_run settings.
+            torrent_list: list of TorrentInfo objects to inspect.
+
+        Returns:
+            None
+
+        Side effects:
+            May stop/close/erase torrents in rTorrent and remove files from disk.
+        """
 
         if torrent_list:
             logger.info("Searching for unregistered torrents...")
@@ -166,12 +221,28 @@ class rTorrentClient(TorrentClient):
             logger.error("List of torrents is empty!")
 
     def export_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Copy all torrents from client to backup dir (delegates to clients.utils)."""
+        """Export torrent session files and optionally archive them.
+
+        Args:
+            config: SeedboxConfig with export_dir and zip_export flags.
+            torrent_list: list of TorrentInfo objects representing torrents to export.
+
+        Returns:
+            None
+        """
 
         export_session_torrents(config, torrent_list, zip_prefix="rTorrent")
 
     def upload_torrents(self, config: SeedboxConfig, torrent_files: list) -> None:
-        """Upload .torrent files to client with save path and label"""
+        """Upload .torrent files to rTorrent, setting save path and label.
+
+        Args:
+            config: SeedboxConfig with torrent_save_path and torrent_label.
+            torrent_files: list of paths to .torrent files.
+
+        Returns:
+            None
+        """
         
         logger.debug("Uploading torrents...")
         try:
@@ -190,7 +261,15 @@ class rTorrentClient(TorrentClient):
             sys.exit(1)
 
     def autoremove_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Delete torrents that have been seeding for more than N hours"""
+        """Remove torrents that exceeded configured seed time from rTorrent and disk.
+
+        Args:
+            config: SeedboxConfig with category_seed_time, minimum_seed_time, skip_labels, dry_run.
+            torrent_list: list of TorrentInfo objects to evaluate.
+
+        Returns:
+            None
+        """
 
         if torrent_list:
             logger.info("Searching for torrents to autoremove...")

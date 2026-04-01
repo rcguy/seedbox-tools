@@ -23,6 +23,20 @@
 # Requires - deluge_web_client loguru
 #
 
+"""
+Deluge client module for seedbox management.
+
+This module provides the DelugeClient class, which implements the TorrentClient interface
+for interacting with Deluge via its web API. It supports operations like fetching torrents,
+moving files, removing unregistered torrents, exporting sessions, uploading torrents,
+and auto-removing torrents based on seeding time.
+
+Example:
+    client = DelugeClient()
+    client.connect(config)
+    torrents = client.get_torrents(config)
+"""
+
 import os
 import sys
 import time
@@ -42,9 +56,21 @@ class DelugeClient(TorrentClient):
     """Class wrapper around DelugeWebClient implementing TorrentClient interface."""
 
     def __init__(self) -> None:
+        """Initialize the DelugeClient with no active connection."""
         self.client = None
 
-    def connect(self, config: SeedboxConfig):
+    def connect(self, config: SeedboxConfig) -> None:
+        """Initialize the Deluge web client connection from configuration.
+
+        Args:
+            config: SeedboxConfig containing deluge.conn_info.
+
+        Returns:
+            None
+
+        Raises:
+            Exception: on connection failure (logged and exits).
+        """
         try:
             logger.info("Connecting to Deluge WebUI...")
             self.client = DelugeWebClient(**config.deluge.conn_info)
@@ -53,6 +79,19 @@ class DelugeClient(TorrentClient):
             sys.exit(1)
 
     def load_web_cfg(self, config_file: str) -> tuple:
+        """Load and parse the Deluge web.conf file into two dictionaries.
+
+        Args:
+            config_file: Path to the web.conf file.
+
+        Returns:
+            A tuple of two dictionaries parsed from the file.
+
+        Raises:
+            FileNotFoundError: if config file not found.
+            PermissionError: if permission denied.
+            Exception: for other I/O or JSON errors.
+        """
         try:
             file_path = os.path.abspath(config_file)
             logger.info(f"Loading webui config from {file_path}")
@@ -89,6 +128,21 @@ class DelugeClient(TorrentClient):
             sys.exit(1)
 
     def save_web_cfg(self, config_file: str, dict1, dict2) -> None:
+        """Save two dictionaries back to the Deluge web.conf file.
+
+        Args:
+            config_file: Path to the web.conf file.
+            dict1: First dictionary to save.
+            dict2: Second dictionary to save.
+
+        Returns:
+            None
+
+        Raises:
+            FileNotFoundError: if config file not found.
+            PermissionError: if permission denied.
+            Exception: for other I/O or JSON errors.
+        """
         try:
             file_path = os.path.abspath(config_file)
             logger.info(f"Saving webui config to {file_path}")
@@ -105,7 +159,19 @@ class DelugeClient(TorrentClient):
             sys.exit(1)
 
     def reset_web_password(self, config: SeedboxConfig) -> None:
-        """Reset Deluge WebUI password by editing the web.conf file."""
+        """Reset Deluge WebUI password by editing the web.conf file.
+
+        Prompts user for new password interactively.
+
+        Args:
+            config: SeedboxConfig containing deluge.web_cfg_path and dry_run.
+
+        Returns:
+            None
+
+        Raises:
+            Exception: on file operations or hashing errors.
+        """
         try:
             logger.info("Resetting Deluge WebUI password...")
             cfg1, cfg2 = self.load_web_cfg(config.deluge.web_cfg_path)
@@ -136,7 +202,17 @@ class DelugeClient(TorrentClient):
             sys.exit(1)
 
     def get_torrents(self, config: SeedboxConfig) -> list:
-        """Get list of all torrents in the client and return a list of TorrentInfo"""
+        """Fetch torrents from Deluge and map them to TorrentInfo objects.
+
+        Args:
+            config: SeedboxConfig containing filter_dict and deluge.state_dir.
+
+        Returns:
+            A list of TorrentInfo objects.
+
+        Raises:
+            Exception: on API errors (logged and exits).
+        """
         try:
             logger.info("Getting list of all torrents...")
             raw = self.client.get_torrents_status(keys=('hash', 'name', 'save_path', 'seeding_time', 'completed_time', 'state', 'tracker_status', 'label', 'total_size'), 
@@ -165,7 +241,18 @@ class DelugeClient(TorrentClient):
             sys.exit(1)
 
     def move_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Move torrent files from NVMe to Spinning Rust after N seconds"""
+        """Move torrents from NVMe staging to final rust storage based on seeding time.
+
+        Args:
+            config: SeedboxConfig containing nvme_dir, rust_dir, nvme_time, sleep_time, dry_run.
+            torrent_list: list of TorrentInfo objects to evaluate and move.
+
+        Returns:
+            None
+
+        Side effects:
+            May move torrent storage via Deluge API.
+        """
         if torrent_list:
             logger.info("Searching for torrents to move...")
 
@@ -193,12 +280,31 @@ class DelugeClient(TorrentClient):
             logger.error("List of torrents is empty!")
 
     def export_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Copy all torrents from client to backup dir (delegates to clients.utils)."""
+        """Export torrent session files and optionally archive them.
+
+        Args:
+            config: SeedboxConfig with export_dir and zip_export flags.
+            torrent_list: list of TorrentInfo objects representing torrents to export.
+
+        Returns:
+            None
+        """
 
         export_session_torrents(config, torrent_list, zip_prefix="Deluge")
 
     def unregistered_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Delete unregistered torrents from client"""
+        """Remove torrents marked as unregistered, except skipped labels, and delete their data.
+
+        Args:
+            config: SeedboxConfig with skip_labels and dry_run settings.
+            torrent_list: list of TorrentInfo objects to inspect.
+
+        Returns:
+            None
+
+        Side effects:
+            May remove torrents from Deluge and delete files from disk.
+        """
         if torrent_list:
             torrents_to_delete = list()
             logger.info("Searching for unregistered torrents...")
@@ -227,7 +333,18 @@ class DelugeClient(TorrentClient):
             logger.error("List of torrents is empty!")
 
     def autoremove_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Delete torrents that have been seeding for more than N hours"""
+        """Remove torrents that exceeded configured seed time from Deluge and disk.
+
+        Args:
+            config: SeedboxConfig with category_seed_time, minimum_seed_time, skip_labels, dry_run.
+            torrent_list: list of TorrentInfo objects to evaluate.
+
+        Returns:
+            None
+
+        Side effects:
+            May remove torrents from Deluge and delete files from disk.
+        """
         if torrent_list:
             torrents_to_delete = list()
             logger.info("Searching for torrents to autoremove...")
@@ -255,7 +372,15 @@ class DelugeClient(TorrentClient):
             logger.error("List of torrents is empty!")
 
     def upload_torrents(self, config: SeedboxConfig, torrent_files: list) -> None:
-        """Upload .torrent files to client with save path and label"""
+        """Upload .torrent files to Deluge, setting save path and label.
+
+        Args:
+            config: SeedboxConfig with torrent_save_path and torrent_label.
+            torrent_files: list of paths to .torrent files.
+
+        Returns:
+            None
+        """
 
         torrent_options = TorrentOptions(
                 add_paused=True,

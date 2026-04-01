@@ -23,6 +23,14 @@
 # Requires - loguru
 #
 
+"""
+Shared utilities for torrent client implementations.
+
+This module provides common functions for file operations, directory management,
+and torrent session handling used across different torrent clients (Deluge, rTorrent, qBittorrent).
+Includes utilities for exporting torrents, creating zip archives, and managing directories.
+"""
+
 from __future__ import annotations
 import os
 import sys
@@ -30,19 +38,29 @@ import shutil
 import fnmatch
 import tempfile
 import zipfile
+from pathlib import Path
 from loguru import logger
 from datetime import datetime
-from typing import Iterable, Optional, List
+from typing import Iterable, Optional, List, Union
 from models.config import SeedboxConfig
 from models.torrent_info import TorrentInfo
 
 def export_session_torrents(config: SeedboxConfig, torrent_list: List[TorrentInfo], zip_prefix: str = "export") -> None:
     """Copy torrent session files into `config.export_dir/<timestamp>/<category>` and optionally zip them.
 
+    Creates a timestamped directory structure, copies .torrent files by category,
+    and optionally creates a zip archive of the exported files.
+
     Args:
-        config: SeedboxConfig with export settings.
+        config: SeedboxConfig with export_dir, zip_export, and dry_run settings.
         torrent_list: List of TorrentInfo objects (must include `session_file`).
-        zip_prefix: Prefix to use for the created zip file (e.g., 'Deluge' or 'rTorrent').
+        zip_prefix: Prefix for the zip filename (e.g., 'Deluge' or 'rTorrent').
+
+    Returns:
+        None
+
+    Side effects:
+        Creates directories, copies files, and may create/delete zip archives.
     """
     if not torrent_list:
         logger.error("List of torrents is empty!")
@@ -75,39 +93,69 @@ def export_session_torrents(config: SeedboxConfig, torrent_list: List[TorrentInf
         create_zip(backup_path, zip_output_file)
         delete_files(backup_path)
 
-def find_files(input_path: str, file_exts: list, recursive: bool) -> list:
-    """Scan directory and locate files"""
+def find_files(input_path: Union[str, Path], file_exts: list[str], recursive: bool) -> list[str]:
+    """Scan directory and locate files with matching extensions.
 
-    file_list = list()
+    Recursively scans the directory if requested, collecting absolute paths
+    of files whose extensions match the provided list.
+
+    Args:
+        input_path: Directory path to scan (string or Path).
+        file_exts: List of file extensions to match (e.g., ['.torrent', '.mp4']).
+        recursive: Whether to scan subdirectories recursively.
+
+    Returns:
+        List of absolute path strings for matching files.
+
+    Raises:
+        FileNotFoundError: If input_path does not exist.
+        NotADirectoryError: If input_path is not a directory.
+        PermissionError: If permission denied accessing the directory.
+        OSError: For other I/O errors during scanning.
+    """
+    directory = Path(input_path)
+
+    if not directory.exists():
+        logger.error(f"Directory not found: '{directory}'")
+        raise FileNotFoundError(directory)
+
+    if not directory.is_dir():
+        logger.error(f"Path is not a directory: '{directory}'")
+        raise NotADirectoryError(directory)
+
+    file_list: list[str] = []
 
     try:
-        with os.scandir(os.path.realpath(input_path, strict=True)) as scan:
-            for entry in scan:
-                try:
-                    if entry.is_file():
-                        file_ext = os.path.splitext(entry)[1].lower()
-                        if file_ext in file_exts:
-                            file_list.append(entry.path)
-                            continue
-                    elif recursive and entry.is_dir(follow_symlinks=False):
-                        files = find_files(entry.path, file_exts, True)
-                        file_list = [*file_list, *files]
-                except OSError as err:
-                    logger.error(f"'{err}'")
-                    continue
-    except FileNotFoundError:
-        logger.error(f"Directory not found: '{os.path.basename(input_path)}'")
-        sys.exit(1)
-    except PermissionError:
-        logger.error(f"Permission denied: '{os.path.basename(input_path)}'")
-        sys.exit(1)
-    except Exception as err:
-        logger.error(err)
-        sys.exit(1)
+        for entry in directory.iterdir():
+            try:
+                if entry.is_file():
+                    ext = entry.suffix.lower()
+                    if ext in file_exts:
+                        file_list.append(str(entry.resolve()))
+                elif recursive and entry.is_dir():
+                    file_list.extend(find_files(entry, file_exts, True))
+            except OSError as err:
+                logger.error(f"Error scanning entry '{entry}': {err}")
+                continue
+    except PermissionError as err:
+        logger.error(f"Permission denied: '{directory}'")
+        raise
+    except OSError as err:
+        logger.error(f"Error scanning directory '{directory}': {err}")
+        raise
 
     return file_list
 
 def _matches_any(path: str, patterns: Optional[Iterable[str]]) -> bool:
+    """Check if a path matches any of the given glob patterns.
+
+    Args:
+        path: The path string to check.
+        patterns: Iterable of glob patterns to match against.
+
+    Returns:
+        True if path matches any pattern, False otherwise.
+    """
     if not patterns:
         return False
     for pat in patterns:
@@ -124,28 +172,28 @@ def create_zip(
     compresslevel: Optional[int] = 9,
     follow_symlinks: bool = False,
 ) -> str:
-    """
-    Create a zip archive containing the files under `src_dir`.
+    """Create a zip archive containing files under src_dir.
 
-    Parameters:
-    - src_dir: directory whose contents will be archived (walked recursively).
-    - dest_zip: optional destination zip file path. If None, a timestamped
-      file will be created inside the parent of `src_dir`.
-    - include: list of glob patterns to explicitly include (applied to relative path).
-               If None or empty, all files are considered for inclusion.
-    - exclude: list of glob patterns to exclude (applied to relative path).
-    - compression: `zipfile` compression method (e.g., ZIP_STORED, ZIP_DEFLATED).
-    - compresslevel: optional compression level (Python 3.7+).
-    - follow_symlinks: whether to follow symlinks when walking.
+    Recursively walks the source directory, applying include/exclude filters,
+    and creates a compressed zip archive. Uses temporary files for atomic writes.
+
+    Args:
+        src_dir: Source directory to archive (walked recursively).
+        dest_zip: Optional destination zip path. If None, creates timestamped file.
+        include: List of glob patterns to include (applied to relative paths).
+        exclude: List of glob patterns to exclude (applied to relative paths).
+        compression: Zipfile compression method (e.g., ZIP_DEFLATED).
+        compresslevel: Compression level (Python 3.7+), None for default.
+        follow_symlinks: Whether to follow symlinks during directory walk.
 
     Returns:
-    - The final path to the created zip file.
+        Path to the created zip file.
 
     Raises:
-    - OSError, zipfile.BadZipFile, ValueError for invalid inputs or I/O failures.
-      Exceptions are logged before being raised.
+        ValueError: If src_dir is invalid or no files found.
+        OSError: For I/O errors during zip creation.
+        zipfile.BadZipFile: For zip file corruption issues.
     """
-
     src_dir = os.path.abspath(src_dir)
 
     if not os.path.isdir(src_dir):
@@ -261,44 +309,74 @@ def create_zip(
             except Exception:
                 logger.debug(f"Failed to remove temporary file {tmp_path} during cleanup")
 
-def make_dir(input_dir: str) -> bool:
-    """Make new directory if necessary"""
+def make_dir(input_dir: Union[str, Path]) -> bool:
+    """Create a directory and all necessary parent directories.
+
+    Safely creates directories without failing if they already exist.
+
+    Args:
+        input_dir: Directory path to create (string or Path).
+
+    Returns:
+        True if directory was created, False if it already existed.
+
+    Raises:
+        PermissionError: If permission denied creating the directory.
+        OSError: For other I/O errors during directory creation.
+    """
+    path = Path(input_dir)
+
+    if path.exists():
+        return False
 
     try:
-        if not os.path.exists(os.path.realpath(input_dir)):
-            os.makedirs(input_dir, exist_ok=True)
-            logger.info(f"Created directory: '{input_dir}'")
-            return True
-    except PermissionError:
-        logger.error(f"Permission denied creating directory: '{input_dir}'")
-        sys.exit(1)
-    except Exception as err:
-        logger.error(err)
-        sys.exit(1)
+        path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Created directory: '{path}'")
+        return True
+    except PermissionError as exc:
+        logger.error(f"Permission denied creating directory: '{path}'")
+        raise
+    except OSError as exc:
+        logger.error(f"Failed to create directory '{path}': {exc}")
+        raise
 
-    return False
+def delete_files(data_path: Union[str, Path]) -> bool:
+    """Delete a file, symlink, or directory from disk.
 
-def delete_files(data_path: str) -> bool:
-    """Delete files from disk"""
+    Handles files, symlinks, and directories recursively. Returns False
+    if the path does not exist, without raising an error.
 
-    data_path = os.path.realpath(data_path)
+    Args:
+        data_path: Path to the file or directory to delete (string or Path).
+
+    Returns:
+        True if deletion succeeded, False if path did not exist.
+
+    Raises:
+        PermissionError: If permission denied deleting the path.
+        OSError: For other I/O errors during deletion.
+    """
+    path = Path(data_path)
+
+    if not path.exists():
+        logger.warning(f"No such file or directory: '{path}'")
+        return False
 
     try:
-        
-        if os.path.isfile(data_path):
-            os.remove(data_path)
-            logger.info(f"File Deleted: {os.path.basename(data_path)}")
-        elif os.path.isdir(data_path):
-            shutil.rmtree(data_path)
-            logger.info(f"Directory Deleted: {data_path}")
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+            logger.info(f"File deleted: {path}")
+        elif path.is_dir():
+            shutil.rmtree(path)
+            logger.info(f"Directory deleted: {path}")
+        else:
+            path.unlink()
+            logger.info(f"Deleted special path: {path}")
 
         return True
-
-    except FileNotFoundError:
-        logger.error(f"No such file or directory:: '{data_path}'")
-    except PermissionError:
-        logger.error(f"Permission Denied: '{data_path}'")
-    except Exception as err:
-        logger.error(f"'{err}'")
-
-    return False
+    except PermissionError as exc:
+        logger.error(f"Permission denied deleting: '{path}'")
+        raise
+    except OSError as exc:
+        logger.error(f"Failed to delete '{path}': {exc}")
+        raise

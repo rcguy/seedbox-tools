@@ -26,6 +26,18 @@
 # Requires - loguru pyyaml rich qbittorrent-api deluge_web_client
 #
 
+"""
+Seedbox Python Tools - Command-line utilities for managing torrent clients.
+
+This script provides a unified CLI interface for managing Deluge, qBittorrent, and rTorrent clients.
+Supports operations like listing torrents, moving files, removing unregistered torrents,
+exporting sessions, uploading torrents, and auto-removing based on seeding time.
+
+Usage:
+    python seedbox.py --client deluge --list
+    python seedbox.py --client rtorrent --export --zip
+"""
+
 import os
 import sys
 import argparse
@@ -47,7 +59,14 @@ CLIENT_MAP = {
 
 
 def cli() -> object:
-    """Command Line Interface"""
+    """Parse command-line arguments and return the argument namespace.
+
+    Sets up comprehensive argument parsing with groups for different clients
+    and operations. Shows help if no arguments provided.
+
+    Returns:
+        argparse.Namespace: Parsed command-line arguments.
+    """
 
     # https://stackoverflow.com/a/44333798
     formatter = lambda prog: argparse.HelpFormatter(prog, width=256, max_help_position=96)
@@ -191,7 +210,17 @@ def cli() -> object:
 
 
 def list_torrents(torrent_list: list) -> None:
-    """Print list of torrents in client"""
+    """Print detailed information about each torrent in the list.
+
+    Logs debug information for each torrent including hash, name, category,
+    seeding time, save path, session file, and tracker status.
+
+    Args:
+        torrent_list: List of TorrentInfo objects to display.
+
+    Returns:
+        None
+    """
 
     if torrent_list:
         for torrent in torrent_list:
@@ -202,7 +231,19 @@ def list_torrents(torrent_list: list) -> None:
 
 
 def print_summary(torrent_list: list, sort_by: str = "category", descending: bool = False) -> None:
-    """Print category summary table (count + total size) using rich."""
+    """Print a formatted table summarizing torrents by category.
+
+    Displays count and total size for each category using Rich library.
+    Supports sorting by category, count, or size.
+
+    Args:
+        torrent_list: List of TorrentInfo objects to summarize.
+        sort_by: Column to sort by ('category', 'count', or 'size').
+        descending: Whether to sort in descending order.
+
+    Returns:
+        None
+    """
 
     if not torrent_list:
         logger.warning("No torrents to summarize")
@@ -278,7 +319,14 @@ def print_summary(torrent_list: list, sort_by: str = "category", descending: boo
 
 
 def main():
-    """Main function"""
+    """Main entry point for the seedbox tools application.
+
+    Sets up logging, parses arguments, loads configuration, connects to the
+    selected torrent client, and executes requested operations.
+
+    Returns:
+        None (exits with sys.exit on errors)
+    """
 
     script_cwd = os.path.abspath(os.path.dirname(__file__))
     logger.add(os.path.join(script_cwd, "logs/seedbox_tools.log"),

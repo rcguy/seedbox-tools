@@ -23,6 +23,20 @@
 # Requires - qbittorrent-api loguru
 #
 
+"""
+qBittorrent client module for seedbox management.
+
+This module provides the qBittorrentClient class, which implements the TorrentClient interface
+for interacting with qBittorrent via its web API. It supports operations like fetching torrents,
+moving files, removing unregistered torrents, exporting sessions, uploading torrents,
+and auto-removing torrents based on seeding time.
+
+Example:
+    client = qBittorrentClient()
+    client.connect(config)
+    torrents = client.get_torrents(config)
+"""
+
 import os
 import sys
 import re
@@ -38,9 +52,21 @@ class qBittorrentClient(TorrentClient):
     """Class wrapper for qbittorrentapi.Client implementing TorrentClient."""
 
     def __init__(self) -> None:
+        """Initialize the qBittorrentClient with no active connection."""
         self.client = None
 
-    def connect(self, config: SeedboxConfig):
+    def connect(self, config: SeedboxConfig) -> None:
+        """Initialize the qBittorrent API client connection from configuration.
+
+        Args:
+            config: SeedboxConfig containing qbittorrent.conn_info.
+
+        Returns:
+            None
+
+        Raises:
+            Exception: on connection failure (logged and exits).
+        """
         try:
             logger.info("Connecting to qBittorrent API...")
             self.client = qbittorrentapi.Client(**config.qbittorrent.conn_info)
@@ -49,7 +75,17 @@ class qBittorrentClient(TorrentClient):
             sys.exit(1)
 
     def get_torrents(self, config: SeedboxConfig) -> list:
-        """Get list of all torrents in the client"""
+        """Fetch torrents from qBittorrent and map them to TorrentInfo objects.
+
+        Args:
+            config: SeedboxConfig containing status_filter, category, tag settings.
+
+        Returns:
+            A list of TorrentInfo objects.
+
+        Raises:
+            Exception: on API errors (logged and exits).
+        """
         try:
             logger.info("Getting list of all torrents...")
             raw = self.client.torrents_info(status_filter=config.torrent_status, category=config.torrent_label, tag=config.torrent_tag, sort="seeding_time")
@@ -76,8 +112,18 @@ class qBittorrentClient(TorrentClient):
             sys.exit(1)
 
     def move_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Move torrent files from NVMe to Spinning Rust after N seconds"""
-        if torrent_list:
+        """Move torrents from NVMe staging to final rust storage based on seeding time.
+
+        Args:
+            config: SeedboxConfig containing nvme_dir, rust_dir, nvme_time, dry_run.
+            torrent_list: list of TorrentInfo objects to evaluate and move.
+
+        Returns:
+            None
+
+        Side effects:
+            May change torrent save paths via qBittorrent API.
+        """
             logger.info("Searching for torrents to move...")
             
             for torrent in torrent_list:
@@ -97,7 +143,21 @@ class qBittorrentClient(TorrentClient):
             logger.error("List of torrents is empty!")
 
     def export_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Copy all torrents from qBittorrent to backup dir"""
+        """Export torrent files from qBittorrent to backup directory.
+
+        Downloads .torrent files via API and saves them in timestamped category folders,
+        optionally creating a zip archive.
+
+        Args:
+            config: SeedboxConfig with export_dir, zip_export, dry_run settings.
+            torrent_list: list of TorrentInfo objects to export.
+
+        Returns:
+            None
+
+        Side effects:
+            Creates directories, downloads and saves .torrent files, may create zip.
+        """
         if torrent_list:
             export_date = datetime.now().strftime("%Y-%m-%dT%H%M%S")
             backup_path = os.path.join(config.export_dir, export_date)
@@ -131,7 +191,18 @@ class qBittorrentClient(TorrentClient):
             logger.error("List of torrents is empty!")
 
     def unregistered_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Delete unregistered torrents from client"""
+        """Remove torrents marked as unregistered, except skipped labels, and delete their data.
+
+        Args:
+            config: SeedboxConfig with skip_labels and dry_run settings.
+            torrent_list: list of TorrentInfo objects to inspect.
+
+        Returns:
+            None
+
+        Side effects:
+            May remove torrents from qBittorrent and delete files from disk.
+        """
         if torrent_list:
             torrents_to_delete = list()
             logger.info("Searching for unregistered torrents...")
@@ -162,7 +233,18 @@ class qBittorrentClient(TorrentClient):
             logger.error("List of torrents is empty!")
 
     def autoremove_torrents(self, config: SeedboxConfig, torrent_list: list) -> None:
-        """Delete torrents that have been seeding for more than N hours"""
+        """Remove torrents that exceeded configured seed time from qBittorrent and disk.
+
+        Args:
+            config: SeedboxConfig with category_seed_time, minimum_seed_time, skip_labels, dry_run.
+            torrent_list: list of TorrentInfo objects to evaluate.
+
+        Returns:
+            None
+
+        Side effects:
+            May remove torrents from qBittorrent and delete files from disk.
+        """
         if torrent_list:
             torrents_to_delete = list()
             logger.info("Searching for torrents to autoremove...")
@@ -188,8 +270,15 @@ class qBittorrentClient(TorrentClient):
             logger.error("List of torrents is empty!")
 
     def upload_torrents(self, config: SeedboxConfig, torrent_files: list) -> None:
-        """Upload .torrent files to qBittorrent"""
+        """Upload .torrent files to qBittorrent, setting save path, category, and tags.
 
+        Args:
+            config: SeedboxConfig with torrent_save_path, torrent_label, torrent_tag.
+            torrent_files: list of paths to .torrent files.
+
+        Returns:
+            None
+        """
         if torrent_files:
             for torrent_file in torrent_files:
                 try:
