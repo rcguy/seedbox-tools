@@ -35,6 +35,15 @@ from rich.console import Console
 from rich.table import Table
 from my_utils import find_files
 from models.config import load_config
+from clients.rtorrent import rTorrentClient
+from clients.deluge import DelugeClient
+from clients.qbittorrent import qBittorrentClient
+
+CLIENT_MAP = {
+    "rtorrent": rTorrentClient,
+    "deluge": DelugeClient,
+    "qbittorrent": qBittorrentClient,
+}
 
 
 def cli() -> object:
@@ -286,28 +295,24 @@ def main():
 
     try:
 
-        client_module = importlib.import_module(f"clients.{client_name}")
-
-        if client_name == "deluge":
-            logger.info("Logging into Deluge Client...")
-            client_api = DelugeWebClient(**config.deluge.conn_info)
-        elif client_name == "qbittorrent":
-            logger.info("Logging into qBittorrent Client...")
-            client_api = qbittorrentapi.Client(**config.qbittorrent.conn_info)
-        elif client_name == "rtorrent":
-            client_api = config.rtorrent.server_url
+        # instantiate the selected client
+        client = CLIENT_MAP[args.client]()
+        client.connect(config)
 
         if args.add:
-            client_module.upload_torrents(client_api, torrent_files, config, paused=True)
+            client.upload_torrents(config, torrent_files)
             sys.exit()
-        if args.reset_password:
-            client_module.reset_web_password(config)
+
+        if args.reset_password and client_name == "deluge":
+            client.reset_web_password(config)
             sys.exit()
-    
-        all_torrents = client_module.get_torrents(client_api, config)
+
+        # get list of all torrents in the client
+        all_torrents = client.get_torrents(config)
 
         if args.list:
             list_torrents(all_torrents)
+
         if args.summary:
             if isinstance(args.summary_sort, (list, tuple)) and len(args.summary_sort) == 2:
                 sort_by = args.summary_sort[0]
@@ -317,18 +322,19 @@ def main():
                 sort_by = args.summary_sort[0] if isinstance(args.summary_sort, (list, tuple)) else args.summary_sort
                 descending = False
             print_summary(all_torrents, sort_by, descending)
-        if args.unregistered:
-            client_module.unregistered_torrents(client_api, all_torrents, config)  
-        if args.move:
-            client_module.move_torrents(client_api, all_torrents, config)
-        if args.remove:
-            client_module.autoremove_torrents(client_api, all_torrents, config)
-        if args.export:
-            client_module.export_torrents(all_torrents, config, args.zip)
 
-    except ImportError:
-        logger.error(f"Client module not found: 'clients.{client_name}'")
-        sys.exit(1)
+        if args.unregistered:
+            client.unregistered_torrents(config, all_torrents)
+
+        if args.move:
+            client.move_torrents(config, all_torrents)
+
+        if args.remove:
+            client.autoremove_torrents(config, all_torrents)
+
+        if args.export:
+            client.export_torrents(config, all_torrents)
+
     except Exception as err:
         logger.error(err)
         sys.exit(1)
