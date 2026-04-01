@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 #
-# qbt_tools.py - Simple tools for managing qBittorrent using the qbittorrent-api Python library
+# qbittorrent.py - Simple functions for managing qBittorrent
 #
 # Copyright (C) 2026 rcguy
 #
@@ -28,106 +28,12 @@
 
 import os
 import sys
-import argparse
 import re
-import yaml
 import qbittorrentapi
 from datetime import datetime
 from loguru import logger
-from my_utils import make_dir, load_yaml
+from my_utils import make_dir
 from models.torrent_info import TorrentInfo
-
-
-def cli() -> object:
-    """Command Line Interface"""
-
-    # https://stackoverflow.com/a/44333798
-    formatter = lambda prog: argparse.HelpFormatter(prog, width=256, max_help_position=64)
-
-    parser = argparse.ArgumentParser(description="qBittorrent Python Tools", formatter_class=formatter)
-    
-    parser.add_argument("-P", "--path",
-                        type=str,
-                        default=None,
-                        help="save path for adding torrents to client (see --torrents-add)")
-    
-    parser.add_argument("-C", "--config",
-                        type=str,
-                        default=None,
-                        help="config file path")
-
-    parser.add_argument("-d", "--export-dir",
-                        type=str,
-                        default=None,
-                        help="export .torrent files to this directory")
-
-    parser.add_argument("-c", "--category",
-                        type=str,
-                        default=None,
-                        help="filter torrents by category")
-
-    parser.add_argument("-s", "--status",
-                        type=str,
-                        default="seeding",
-                        metavar="STATUS",
-                        choices=["all", "downloading", "seeding", "completed", "paused", "stopped", "active", "inactive", "resumed", "running", "stalled", "stalled_uploading", "stalled_downloading", "checking", "moving", "errored"],
-                        help="filter torrents by status")
-
-    parser.add_argument("-t", "--tag",
-                        type=str,
-                        default=None,
-                        help="filter torrents by tag")
-
-    parser.add_argument("-k", "--skip-labels",
-                        type=str,
-                        nargs="+",
-                        default=None,
-                        help="skip torrents with these categories/labels when performing commands")
-    
-    parser.add_argument("-S", "--seed-time",
-                        type=int,
-                        default=None,
-                        help="minimum seed time in seconds before removing torrents from client")
-    
-    parser.add_argument("-n", "--nvme-time",
-                        type=int,
-                        default=None,
-                        help="minimum time in seconds that torrent has been on NVMe before moving to Spinning Rust")
-
-    commands = parser.add_argument_group('commands')
-
-    commands.add_argument("-T", "--add-torrents",
-                        type=str,
-                        nargs="+",
-                        default=None,
-                        metavar="FILES",
-                        help="add .torrent files to client with this save path and category (see --category)")
-    
-    commands.add_argument("-A", "--autoremove",
-                        action='store_true',
-                        help="remove torrents that have been seeding for more than N seconds (see --seed-time)")
-    
-    commands.add_argument("-U", "--unregistered",
-                        action='store_true',
-                        help='remove unregistered torrents from client')
-
-    commands.add_argument("-L", "--list-torrents",
-                        action="store_true",
-                        help="list all torrents in client")
-
-    commands.add_argument("-M", "--move-torrents",
-                        action="store_true",
-                        help="move torrents from NVMe to Spinning Rust after N seconds (see --nvme-time)")
-    
-    commands.add_argument("-E", "--export-torrents",
-                        action="store_true",
-                        help="export all .torrent files from client")
-
-    commands.add_argument("-D", "--dry-run",
-                        action="store_true",
-                        help="perform a trial run with no changes made")
-
-    return parser.parse_args()
 
 
 def get_torrents(client: qbittorrentapi.Client, status_filter: str, category_filter:str, tag_filter: str) -> list:
@@ -157,16 +63,6 @@ def get_torrents(client: qbittorrentapi.Client, status_filter: str, category_fil
     except Exception as err:
         logger.error(err)
         sys.exit(1)
-
-
-def list_torrents(torrent_list: list) -> None:
-    """Print list of torrents in client"""
-
-    if torrent_list:
-        for torrent in torrent_list:
-            logger.debug(f"{(torrent.infohash or '')[-6:]}: {torrent.name} cat={torrent.category} tags={torrent.tags} seed_time={torrent.seeding_time} path={torrent.save_path} ")
-    else:
-        logger.error("List of torrents is empty!")
 
 
 def move_torrents(client: qbittorrentapi.Client, torrent_list: list) -> None:
@@ -288,55 +184,3 @@ def upload_torrents(client: qbittorrentapi.Client, torrent_files: list, save_dir
                 continue
     else:
         logger.error("List of .torrent files is empty!")
-
-
-if __name__ == "__main__":
-
-    script_cwd = os.path.abspath(os.path.dirname(__file__))
-    logger.add(os.path.join(script_cwd, "logs/qbittorrent_tools.log"),
-        format="{time} - {level} - {message}",
-        level=20,
-        rotation="1 week",
-        compression="gz"
-    )
-
-    args = cli()
-    dry_run = args.dry_run
-    cfg_path = os.path.abspath(args.config) if args.config else os.path.join(script_cwd, "cfg/seedbox.yaml")
-    cfg = load_yaml(cfg_path)["Seedbox"]
-    skip_labels = cfg["skip_labels"] if not args.skip_labels else args.skip_labels
-    category_seed_time = cfg["category_seed_time"]
-    minimum_seed_time = cfg["minimum_seed_time"] if not args.seed_time else args.seed_time
-    nvme_time = cfg["nvme_cache_time"] if not args.nvme_time else args.nvme_time
-    nvme_dir = cfg["nvme_dir"]
-    rust_dir = cfg["rust_dir"]
-    export_dir = os.path.abspath(args.export_dir) if args.export_dir else os.path.join(script_cwd, cfg["export_dir"])
-    conn_info = dict(
-        host=cfg["qBittorrent"]["host"],
-        port=cfg["qBittorrent"]["port"],
-        username=cfg["qBittorrent"]["username"],
-        password=cfg["qBittorrent"]["password"],
-    )
-
-    try:
-        with qbittorrentapi.Client(**conn_info) as qbt_client:
-
-            all_torrents = get_torrents(qbt_client, args.status, args.category, args.tag)
-
-            if args.list_torrents:
-                list_torrents(all_torrents)
-            if args.unregistered:
-                unregistered_torrents(qbt_client, all_torrents)  
-            if args.move_torrents:
-                move_torrents(qbt_client, all_torrents)
-            if args.autoremove:
-                autoremove_torrents(qbt_client, all_torrents)
-            if args.export_torrents:
-                export_torrents(qbt_client, export_dir, all_torrents)
-
-            qbt_client.auth_log_out()
-            sys.exit()
-
-    except qbittorrentapi.LoginFailed as e:
-        logger.error(e)
-        sys.exit(1)

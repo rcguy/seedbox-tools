@@ -21,9 +21,9 @@
 #
 # Author - rcguy
 # Created - 2026-03-16
-# Updated - 2026-03-30
-# Version - 1.4.0
-# Requires - loguru pyyaml rcguy_utils
+# Updated - 2026-03-31
+# Version - 1.4.1
+# Requires - loguru pyyaml rich rcguy_utils
 #
 
 import os
@@ -153,14 +153,11 @@ def cli() -> object:
                         help="print category summary table with count and total size of torrents in each category")
 
     summary.add_argument("--summary-sort",
+                        nargs=2,
+                        metavar=("COLUMN", "ORDER"),
                         type=str,
-                        choices=["category", "count", "size"],
-                        default="category",
-                        help="column to sort category summary by")
-
-    summary.add_argument("--summary-desc",
-                        action="store_true",
-                        help="reverse sort order for category summary")
+                        default=["category", "asc"],
+                        help="column and order to sort category summary by (e.g. 'size desc' or 'count asc')")
 
     Deluge = parser.add_argument_group('Deluge')
 
@@ -512,7 +509,14 @@ if __name__ == "__main__":
         if args.list_torrents:
             list_torrents(all_torrents)
         if args.summary:
-            print_category_summary(all_torrents, args.summary_sort, args.summary_desc)
+            if isinstance(args.summary_sort, (list, tuple)) and len(args.summary_sort) == 2:
+                sort_by = args.summary_sort[0]
+                order = args.summary_sort[1].lower()
+                descending = True if order in ("desc", "descending", "d") else False
+            else:
+                sort_by = args.summary_sort[0] if isinstance(args.summary_sort, (list, tuple)) else args.summary_sort
+                descending = False
+            print_category_summary(all_torrents, sort_by, descending)
         if args.unregistered:
             unregistered_torrents(server_url, all_torrents, config)  
         if args.move_torrents:

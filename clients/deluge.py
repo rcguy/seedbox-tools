@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 #
-# deluge_tools.py - Simple tools for managing Deluge torrents
+# deluge.py - Simple functions for managing Deluge torrents
 #
 # Copyright (C) 2026 rcguy
 #
@@ -30,119 +30,15 @@ import os
 import sys
 import time
 import shutil
-import argparse
 import hashlib
 import getpass
 import re
-import yaml
 import json
 from datetime import datetime
 from deluge_web_client import DelugeWebClient, TorrentOptions, Response
 from loguru import logger
-from my_utils import make_dir, load_yaml
+from my_utils import make_dir
 from models.torrent_info import TorrentInfo
-
-
-def cli() -> object:
-    """Command Line Interface"""
-
-    # https://stackoverflow.com/a/44333798
-    formatter = lambda prog: argparse.HelpFormatter(prog, width=256, max_help_position=64)
-
-    parser = argparse.ArgumentParser(description="Deluge Python Tools", formatter_class=formatter)
-    
-    parser.add_argument("-c", "--config",
-                        type=str,
-                        default=None,
-                        help="config file path")
-    
-    parser.add_argument("-d", "--export-dir",
-                        type=str,
-                        default=None,
-                        help="export .torrent files to this directory")
-
-    parser.add_argument("-l", "--label",
-                        type=str,
-                        default=None,
-                        help="label for adding torrents to client (see --torrents-add)")
-
-    parser.add_argument("-p", "--path",
-                        type=str,
-                        default=None,
-                        help="save path for adding torrents to client (see --torrents-add)")
-    
-    parser.add_argument("-f", "--filter",
-                        type=str,
-                        nargs="+",
-                        default=None,
-                        help="filter torrents by key=value pairs (e.g. --filter label=Movies)")
-
-    parser.add_argument("-k", "--skip-labels",
-                        type=str,
-                        nargs="+",
-                        default=None,
-                        help="skip torrents with these labels when performing commands")
-    
-    parser.add_argument("-s", "--seed-time",
-                        type=int,
-                        default=None,
-                        help="minimum seed time in hours before removing torrents from client")
-    
-    parser.add_argument("-n", "--nvme-time",
-                        type=int,
-                        default=None,
-                        help="minimum time in seconds that torrent has been on NVMe before moving to Spinning Rust")
-
-    parser.add_argument("-v", "--log-level",
-                        type=str,
-                        default="INFO",
-                        metavar="LOG_LEVEL",
-                        choices=["TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"],
-                        help="set log level (default: INFO)")
-
-    commands = parser.add_argument_group('commands')
-
-    commands.add_argument("-T", "--add-torrents",
-                        type=str,
-                        nargs="+",
-                        default=None,
-                        metavar="FILES",
-                        help="add .torrent files to client with this save path and label (see --label and --path)")
-    
-    commands.add_argument("-A", "--autoremove",
-                        action='store_true',
-                        help="remove torrents that have been seeding for more than N seconds (see --seed-time)")
-    
-    commands.add_argument("-U", "--unregistered",
-                        action='store_true',
-                        help='remove unregistered torrents from client')
-
-    commands.add_argument("-L", "--list-torrents",
-                        action="store_true",
-                        help="list all torrents in client")
-
-    commands.add_argument("-M", "--move-torrents",
-                        action="store_true",
-                        help="move torrents from NVMe to Spinning Rust after N seconds (see --nvme-time)")
-    
-    commands.add_argument("-E", "--export-torrents",
-                        action="store_true",
-                        help="export all .torrent files from client")
-
-    commands.add_argument("-D", "--dry-run",
-                        action="store_true",
-                        help="perform a trial run with no changes made")
-
-    commands.add_argument("-R", "--reset-password",
-                        action="store_true",
-                        help="reset Deluge WebUI password by editing the web.conf file")
-
-    # Show help if no arguments provided
-    if len(sys.argv) == 1:
-        parser.print_help()
-        sys.exit()
-
-    return parser.parse_args()
 
 
 def load_web_cfg(config_file: str) -> tuple:
@@ -284,16 +180,6 @@ def get_torrents(client: DelugeWebClient, filter: dict = {}) -> list:
     except Exception as err:
         logger.error(err)
         sys.exit(1)
-
-
-def list_torrents(torrent_list: list) -> None:
-    """Print list of torrents in client"""
-
-    if torrent_list:
-        for torrent in torrent_list:
-            logger.debug(f"{(torrent.infohash or '')[-6:]}: {torrent.name} path={torrent.save_path} seed_time={torrent.seeding_time} state={torrent.state} tracker_status='{torrent.tracker_status}' label='{torrent.category}'")
-    else:
-        logger.error("List of torrents is empty!")
 
 
 def move_torrents(client: DelugeWebClient, torrent_list: list) -> None:
@@ -440,72 +326,3 @@ def upload_torrents(client: DelugeWebClient, torrent_files: list, save_path: str
             logger.error(err)
     else:
         logger.error("List of .torrent files is empty!")
-
-
-def main():
-    """Main function"""
-
-    global dry_run, skip_labels, sleep_time, category_seed_time, minimum_seed_time, nvme_time, nvme_dir, rust_dir, deluge_dir, state_dir
-
-    script_cwd = os.path.dirname(os.path.abspath(__file__))
-    logger.add(os.path.join(script_cwd, "logs/deluge_tools.log"),
-        format="{time} - {level} - {message}",
-        level=20,
-        rotation="1 week",
-        compression="gz"
-    )
-
-    args = cli()
-    dry_run = args.dry_run
-    cfg_path = os.path.abspath(args.config) if args.config else os.path.join(script_cwd, "cfg/seedbox.yaml")
-    cfg = load_yaml(cfg_path)["Seedbox"]
-    skip_labels = cfg["skip_labels"] if not args.skip_labels else args.skip_labels
-    sleep_time = cfg["sleep_time"]
-    category_seed_time = cfg["category_seed_time"]
-    minimum_seed_time = cfg["minimum_seed_time"] if not args.seed_time else args.seed_time
-    nvme_time = cfg["nvme_cache_time"] if not args.nvme_time else args.nvme_time
-    nvme_dir = cfg["nvme_dir"]
-    rust_dir = cfg["rust_dir"]
-    deluge_dir = cfg["Deluge"]["cfg_dir"]
-    state_dir = os.path.join(deluge_dir, "state")
-    web_cfg_path = os.path.join(deluge_dir, "web.conf")
-    filter_dict = dict(map(lambda s: s.split('='), args.filter)) if args.filter else {}
-    export_dir = os.path.abspath(args.export_dir) if args.export_dir else os.path.join(script_cwd, cfg["export_dir"])
-    conn_info = dict(
-        url=cfg["Deluge"]["url"],
-        password=cfg["Deluge"]["password"],
-    )
-
-    try:
-        
-        if args.reset_password:
-            reset_web_password(web_cfg_path)
-            sys.exit()
-
-        logger.info("Logging into Deluge Client...")
-        with DelugeWebClient(**conn_info) as client:
-
-            if args.add_torrents:
-                upload_torrents(client, args.add_torrents, args.path, args.label, paused=True)
-                sys.exit()
-            
-            all_torrents = get_torrents(client, filter_dict)
-
-            if args.list_torrents:
-                list_torrents(all_torrents)
-            if args.unregistered:
-                unregistered_torrents(client, all_torrents)  
-            if args.move_torrents:
-                move_torrents(client, all_torrents)
-            if args.autoremove:
-                autoremove_torrents(client, all_torrents)
-            if args.export_torrents:
-                export_torrents(export_dir, all_torrents)
-
-    except Exception as err:
-        logger.error(err)
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    sys.exit(main())
