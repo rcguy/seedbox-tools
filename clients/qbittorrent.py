@@ -86,6 +86,7 @@ class qBittorrentClient(TorrentClient):
         Raises:
             Exception: on API errors (logged and exits).
         """
+
         try:
             logger.info("Getting list of all torrents...")
             raw = self.client.torrents_info(status_filter=config.torrent_status, category=config.torrent_label, tag=config.torrent_tag, sort="seeding_time")
@@ -124,6 +125,7 @@ class qBittorrentClient(TorrentClient):
         Side effects:
             May change torrent save paths via qBittorrent API.
         """
+        if torrent_list:
             logger.info("Searching for torrents to move...")
             
             for torrent in torrent_list:
