@@ -18,9 +18,9 @@
 #
 # Author - rcguy
 # Created - 2026-03-16
-# Updated - 2026-03-31
-# Version - 1.4.0
-# Requires - loguru pyyaml deluge_web_client
+# Updated - 2026-04-01
+# Version - 1.4.1
+# Requires - deluge_web_client loguru
 #
 
 import os
@@ -31,15 +31,12 @@ import hashlib
 import getpass
 import re
 import json
-from datetime import datetime
-from deluge_web_client import DelugeWebClient, TorrentOptions
 from loguru import logger
-from my_utils import make_dir, delete_files, create_zip
+from deluge_web_client import DelugeWebClient, TorrentOptions
 from models.torrent_info import TorrentInfo
 from models.config import SeedboxConfig
 from clients.base import TorrentClient
 from clients.utils import export_session_torrents
-
 
 class DelugeClient(TorrentClient):
     """Class wrapper around DelugeWebClient implementing TorrentClient interface."""

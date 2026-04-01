@@ -18,9 +18,9 @@
 #
 # Author - rcguy
 # Created - 2026-03-16
-# Updated - 2026-03-31
-# Version - 1.5.0
-# Requires - loguru pyyaml rich rcguy_utils
+# Updated - 2026-04-01
+# Version - 1.5.1
+# Requires - loguru
 #
 
 import os
@@ -29,14 +29,12 @@ import time
 import shutil
 import xmlrpc.client
 import re
-from datetime import datetime
 from loguru import logger
-from my_utils import make_dir, delete_files, create_zip
+from datetime import datetime
 from models.torrent_info import TorrentInfo
 from models.config import SeedboxConfig
 from clients.base import TorrentClient
-from clients.utils import export_session_torrents
-
+from clients.utils import export_session_torrents, make_dir, delete_files
 
 class rTorrentClient(TorrentClient):
     """Class wrapper for rTorrent XML-RPC operations implementing TorrentClient."""

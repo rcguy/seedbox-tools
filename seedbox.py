@@ -21,9 +21,9 @@
 #
 # Author - rcguy
 # Created - 2026-03-31
-# Updated - 2026-03-31
-# Version - 1.0.0
-# Requires - loguru pyyaml rich rcguy_utils qbittorrent-api deluge_web_client
+# Updated - 2026-04-01
+# Version - 1.0.1
+# Requires - loguru pyyaml rich qbittorrent-api deluge_web_client
 #
 
 import os
@@ -33,8 +33,8 @@ import importlib
 from loguru import logger
 from rich.console import Console
 from rich.table import Table
-from my_utils import find_files
 from models.config import load_config
+from clients.utils import find_files
 from clients.rtorrent import rTorrentClient
 from clients.deluge import DelugeClient
 from clients.qbittorrent import qBittorrentClient

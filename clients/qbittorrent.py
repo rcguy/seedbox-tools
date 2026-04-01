@@ -18,22 +18,21 @@
 #
 # Author - rcguy
 # Created - 2026-03-16
-# Updated - 2026-03-31
-# Version - 1.3.0
-# Requires - loguru pyyaml qbittorrent-api
+# Updated - 2026-04-01
+# Version - 1.3.1
+# Requires - qbittorrent-api loguru
 #
 
 import os
 import sys
 import re
 import qbittorrentapi
-from datetime import datetime
 from loguru import logger
-from my_utils import make_dir, create_zip, delete_files
+from datetime import datetime
 from models.torrent_info import TorrentInfo
 from models.config import SeedboxConfig
 from clients.base import TorrentClient
-
+from clients.utils import make_dir, create_zip, delete_files
 
 class qBittorrentClient(TorrentClient):
     """Class wrapper for qbittorrentapi.Client implementing TorrentClient."""
